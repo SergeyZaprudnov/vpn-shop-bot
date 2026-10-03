@@ -1,3 +1,4 @@
+"""Асинхронный HTTP-клиент для управления клиентами в панели AmneziaWG Easy."""
 import aiohttp
 import logging
 from config import cfg
@@ -6,17 +7,22 @@ logger = logging.getLogger(__name__)
 
 
 class AWGClient:
+    """Обёртка над REST API панели AmneziaWG Easy (порт 51821)."""
+
     def __init__(self):
         self.base = cfg.AWG_URL.rstrip("/")
         self.session = None
+        # Basic Auth: логин всегда "admin", пароль из .env
         self.auth = aiohttp.BasicAuth("admin", cfg.AWG_PASSWORD)
 
     async def _get_session(self):
+        """Ленивая инициализация сессии aiohttp."""
         if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession(auth=self.auth)
         return self.session
 
     async def create_client(self, name: str):
+        """Создаёт нового клиента. Возвращает dict с id или None."""
         session = await self._get_session()
         try:
             async with session.post(
@@ -32,6 +38,7 @@ class AWGClient:
             return None
 
     async def get_client_config(self, client_id: str):
+        """Скачивает .conf файл клиента как текст."""
         session = await self._get_session()
         try:
             async with session.get(
@@ -42,6 +49,7 @@ class AWGClient:
             return None
 
     async def disable_client(self, client_id: str) -> bool:
+        """Блокирует клиента (сохраняя ключи)."""
         session = await self._get_session()
         try:
             async with session.post(
@@ -52,6 +60,7 @@ class AWGClient:
             return False
 
     async def enable_client(self, client_id: str) -> bool:
+        """Разблокирует клиента."""
         session = await self._get_session()
         try:
             async with session.post(
@@ -62,6 +71,7 @@ class AWGClient:
             return False
 
     async def delete_client(self, client_id: str) -> bool:
+        """Удаляет клиента из панели."""
         session = await self._get_session()
         try:
             async with session.delete(
