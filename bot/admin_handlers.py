@@ -5,6 +5,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramBadRequest
 
 from database import (
     get_admin_stats, get_all_clients, get_user,
@@ -34,7 +35,11 @@ async def admin_panel(message: Message):
 @router.callback_query(F.data == "admin_menu", IsAdmin())
 async def back_admin(call: CallbackQuery):
     """Возврат в главное меню админки."""
-    await call.message.edit_text("🔐 Админ-панель", reply_markup=admin_menu())
+    try:
+        await call.message.edit_text("🔐 Админ-панель", reply_markup=admin_menu())
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
     await call.answer()
 
 
@@ -49,8 +54,18 @@ async def show_stats(call: CallbackQuery):
         f"🔴 Заблок: <b>{s['blocked_clients']}</b>\n"
         f"💰 Сумма: <b>{s['total_revenue']:.2f} ₽</b>"
     )
-    await call.message.edit_text(text, parse_mode="HTML", reply_markup=admin_stats_keyboard())
-    await call.answer()
+    try:
+        await call.message.edit_text(
+            text, parse_mode="HTML",
+            reply_markup=admin_stats_keyboard()
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            await call.answer("Данные не изменились")
+        else:
+            raise
+    else:
+        await call.answer("Статистика обновлена")
 
 
 @router.callback_query(F.data == "admin_clients", IsAdmin())
@@ -58,9 +73,17 @@ async def show_clients(call: CallbackQuery):
     """Показывает список всех клиентов."""
     clients = await get_all_clients()
     if not clients:
-        await call.message.edit_text("Нет клиентов.", reply_markup=admin_menu())
+        text = "Нет клиентов."
+        kb = admin_menu()
     else:
-        await call.message.edit_text("👥 Выберите:", reply_markup=clients_list_keyboard(clients))
+        text = "👥 Выберите:"
+        kb = clients_list_keyboard(clients)
+
+    try:
+        await call.message.edit_text(text, reply_markup=kb)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
     await call.answer()
 
 
@@ -80,10 +103,14 @@ async def manage_client(call: CallbackQuery):
         f"До: <code>{u['paid_until']}</code>\n"
         f"ID: <code>{uid}</code>"
     )
-    await call.message.edit_text(
-        text, parse_mode="HTML",
-        reply_markup=client_manage_keyboard(uid, bool(u["is_active"]))
-    )
+    try:
+        await call.message.edit_text(
+            text, parse_mode="HTML",
+            reply_markup=client_manage_keyboard(uid, bool(u["is_active"]))
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
     await call.answer()
 
 
@@ -96,6 +123,8 @@ async def disable_cb(call: CallbackQuery):
         await deactivate_user(uid)
         await call.answer("🔒 Заблокирован")
         await manage_client(call)
+    else:
+        await call.answer("❌ Ошибка блокировки", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("admin_enable_"), IsAdmin())
@@ -107,6 +136,8 @@ async def enable_cb(call: CallbackQuery):
         await extend_subscription(uid, 0)
         await call.answer("🔓 Разблокирован")
         await manage_client(call)
+    else:
+        await call.answer("❌ Ошибка разблокировки", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("admin_extend_"), IsAdmin())
@@ -128,12 +159,16 @@ async def extend_custom_start(call: CallbackQuery, state: FSMContext):
     uid = int(call.data.split("_")[-1])
     await state.update_data(uid=uid)
     await state.set_state(AdminState.waiting_for_days)
-    await call.message.edit_text(
-        "Введите количество дней:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="◀️ Отмена", callback_data=f"admin_client_{uid}")
-        ]])
-    )
+    try:
+        await call.message.edit_text(
+            "Введите количество дней:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="◀️ Отмена", callback_data=f"admin_client_{uid}")
+            ]])
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
     await call.answer()
 
 
@@ -171,3 +206,5 @@ async def delete_cb(call: CallbackQuery):
             await db.commit()
         await call.answer("🗑 Удалён")
         await show_clients(call)
+    else:
+        await call.answer("Клиент не найден", show_alert=True)
