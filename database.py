@@ -1,3 +1,4 @@
+"""Модуль для работы с базой данных SQLite через aiosqlite."""
 import os
 import aiosqlite
 from datetime import datetime, timedelta
@@ -6,6 +7,7 @@ DB_PATH = os.getenv("DB_PATH", "vpn_bot.db")
 
 
 async def init_db():
+    """Создаёт таблицы users и payments при первом запуске."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -32,6 +34,7 @@ async def init_db():
 
 
 async def add_user(user_id: int, username: str):
+    """Добавляет пользователя или игнорирует дубликат."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)",
@@ -41,6 +44,7 @@ async def add_user(user_id: int, username: str):
 
 
 async def get_user(user_id: int):
+    """Возвращает запись пользователя или None."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cur:
@@ -48,6 +52,7 @@ async def get_user(user_id: int):
 
 
 async def update_subscription(user_id: int, client_name: str, client_id: str, days: int):
+    """Активирует подписку: привязывает client_id и устанавливает paid_until."""
     paid_until = (datetime.now() + timedelta(days=days)).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
@@ -58,6 +63,7 @@ async def update_subscription(user_id: int, client_name: str, client_id: str, da
 
 
 async def get_expiring_users(days_before: int):
+    """Пользователи, у которых подписка истекает ровно через N дней."""
     target = (datetime.now() + timedelta(days=days_before)).date().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -69,6 +75,7 @@ async def get_expiring_users(days_before: int):
 
 
 async def get_expired_users():
+    """Пользователи с истёкшей подпиской, но ещё активные."""
     today = datetime.now().date().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -80,12 +87,14 @@ async def get_expired_users():
 
 
 async def deactivate_user(user_id: int):
+    """Ставит is_active=0 (блокировка без удаления)."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE users SET is_active=0 WHERE user_id=?", (user_id,))
         await db.commit()
 
 
 async def extend_subscription(user_id: int, days: int):
+    """Продлевает подписку на N дней от текущей даты paid_until."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT paid_until FROM users WHERE user_id=?", (user_id,)) as cur:
@@ -101,6 +110,7 @@ async def extend_subscription(user_id: int, days: int):
 
 
 async def record_payment(user_id: int, amount: float, payment_id: str):
+    """Записывает успешный платёж в таблицу payments."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT OR IGNORE INTO payments (user_id, amount, payment_id, status) "
@@ -111,23 +121,16 @@ async def record_payment(user_id: int, amount: float, payment_id: str):
 
 
 async def get_admin_stats() -> dict:
+    """Возвращает статистику для админ-панели."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT COUNT(*) as cnt FROM users WHERE client_id IS NOT NULL"
-        ) as cur:
+        async with db.execute("SELECT COUNT(*) as cnt FROM users WHERE client_id IS NOT NULL") as cur:
             total = (await cur.fetchone())["cnt"]
-        async with db.execute(
-            "SELECT COUNT(*) as cnt FROM users WHERE is_active=1 AND client_id IS NOT NULL"
-        ) as cur:
+        async with db.execute("SELECT COUNT(*) as cnt FROM users WHERE is_active=1 AND client_id IS NOT NULL") as cur:
             online = (await cur.fetchone())["cnt"]
-        async with db.execute(
-            "SELECT COUNT(*) as cnt FROM users WHERE is_active=0 AND client_id IS NOT NULL"
-        ) as cur:
+        async with db.execute("SELECT COUNT(*) as cnt FROM users WHERE is_active=0 AND client_id IS NOT NULL") as cur:
             blocked = (await cur.fetchone())["cnt"]
-        async with db.execute(
-            "SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status='succeeded'"
-        ) as cur:
+        async with db.execute("SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status='succeeded'") as cur:
             revenue = (await cur.fetchone())["total"]
         return {
             "total_clients": total,
@@ -138,6 +141,7 @@ async def get_admin_stats() -> dict:
 
 
 async def get_all_clients() -> list:
+    """Возвращает всех клиентов для админ-списка."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("""
