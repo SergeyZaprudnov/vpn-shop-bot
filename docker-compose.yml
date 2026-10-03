@@ -1,0 +1,20 @@
+version: "3.8"
+
+services:
+  amnezia-vpn-bot:
+    build: .
+    container_name: amnezia-vpn-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    ports:
+      - "5000:5000"
+    networks:
+      - bot-network
+
+networks:
+  bot-network:
+    driver: bridge
