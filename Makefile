@@ -1,8 +1,7 @@
-.PHONY: help install install-dev run test test-cov lint clean deploy logs stop restart update
+.PHONY: help install install-dev run test deploy logs stop restart update \
+        docker-build docker-up docker-down docker-logs docker-restart docker-shell docker-update
 
 PROJECT_NAME = amnezia-vpn-bot
-DEPLOY_DIR = /opt/$(PROJECT_NAME)
-SERVICE_NAME = $(PROJECT_NAME)
 VENV = venv
 
 help:
@@ -10,12 +9,9 @@ help:
 	@echo "make install-dev  - установить зависимости для разработки"
 	@echo "make run          - запустить бота"
 	@echo "make test         - запустить тесты"
-	@echo "make test-cov     - тесты с покрытием"
-	@echo "make deploy       - установить systemd-сервис"
-	@echo "make logs         - логи сервиса"
-	@echo "make restart      - перезапустить"
-	@echo "make update       - обновить и перезапустить"
-	@echo "make clean        - удалить временные файлы"
+	@echo "make docker-up    - запустить контейнер"
+	@echo "make docker-logs  - логи контейнера"
+	@echo "make docker-update - обновить и перезапустить"
 
 install:
 	python3 -m venv $(VENV)
@@ -31,30 +27,29 @@ run:
 test:
 	./$(VENV)/bin/pytest
 
-test-cov:
-	./$(VENV)/bin/pip install pytest-cov
-	./$(VENV)/bin/pytest --cov=. --cov-report=html --cov-report=term
-
 clean:
 	rm -rf __pycache__ */__pycache__ .pytest_cache htmlcov .coverage
 	rm -f test_vpn_bot.db vpn_bot.db
 
-deploy:
-	cp deploy/$(SERVICE_NAME).service /etc/systemd/system/
-	systemctl daemon-reload
-	systemctl enable $(SERVICE_NAME)
-	systemctl restart $(SERVICE_NAME)
+docker-build:
+	docker compose build
 
-logs:
-	journalctl -u $(SERVICE_NAME) -f
+docker-up:
+	docker compose up -d
 
-stop:
-	systemctl stop $(SERVICE_NAME)
+docker-down:
+	docker compose down
 
-restart:
-	systemctl restart $(SERVICE_NAME)
+docker-logs:
+	docker compose logs -f
 
-update:
-	git pull
-	./$(VENV)/bin/pip install -r requirements.txt
-	systemctl restart $(SERVICE_NAME)
+docker-restart:
+	docker compose restart
+
+docker-shell:
+	docker compose exec amnezia-vpn-bot sh
+
+docker-update:
+	docker compose down
+	docker compose build --no-cache
+	docker compose up -d
