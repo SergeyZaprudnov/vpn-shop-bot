@@ -6,7 +6,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
 
-from database import add_user, get_user, update_subscription
+from database import (
+    add_user, get_user, update_subscription,
+    set_last_message, get_last_message
+)
 from awg_client import awg
 from payments import create_payment
 from bot.keyboards import (
@@ -21,6 +24,20 @@ router = Router()
 class BuyState(StatesGroup):
     """Состояние ожидания имени для VPN-клиента."""
     waiting_for_name = State()
+
+
+async def safe_reply(message: Message, user_id: int, text: str,
+                     reply_markup=None, parse_mode="HTML"):
+    """Удаляет предыдущее сообщение бота и отправляет новое."""
+    last_id = await get_last_message(user_id)
+    if last_id and last_id != message.message_id:
+        try:
+            await message.bot.delete_message(chat_id=user_id, message_id=last_id)
+        except Exception:
+            pass
+    sent = await message.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
+    await set_last_message(user_id, sent.message_id)
+    return sent
 
 
 @router.message(CommandStart())
@@ -42,6 +59,7 @@ async def buy_vpn(call: CallbackQuery, state: FSMContext):
     """Запрашивает имя для VPN-клиента. Заменяет текущее сообщение."""
     try:
         await call.message.edit_text("Введите имя для VPN (латиницей):")
+        await set_last_message(call.from_user.id, call.message.message_id)
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
@@ -52,15 +70,16 @@ async def buy_vpn(call: CallbackQuery, state: FSMContext):
 @router.message(BuyState.waiting_for_name)
 async def process_name(message: Message, state: FSMContext):
     """Создаёт счёт в ЮKassa и отправляет ссылку на оплату.
-    Здесь используется answer, так как пользователь ввёл новое текстовое сообщение."""
+    Здесь используется новое сообщение, так как пользователь ввёл текст."""
     name = message.text.strip().replace(" ", "_")[:30]
     await state.clear()
     payment = create_payment(message.from_user.id)
     if payment:
-        await message.answer(
+        sent = await message.answer(
             f"💳 Счёт на {cfg.PAYMENT_PRICE} ₽",
             reply_markup=payment_keyboard(payment["confirmation_url"])
         )
+        await set_last_message(message.from_user.id, sent.message_id)
     else:
         await message.answer("❌ Ошибка платежа")
 
@@ -85,14 +104,24 @@ async def check_payment_cb(call: CallbackQuery):
         return
 
     await update_subscription(call.from_user.id, client_name, client["id"], cfg.SUBSCRIPTION_DAYS)
+
+    # Удаляем предыдущее сообщение бота, чтобы не копить мусор
+    last_id = await get_last_message(call.from_user.id)
+    if last_id:
+        try:
+            await call.bot.delete_message(chat_id=call.from_user.id, message_id=last_id)
+        except Exception:
+            pass
+
     await call.message.answer_document(
         document=("vpn.conf", config_text.encode()),
         caption=f"✅ Оплата получена! Ваш VPN-конфиг на {cfg.SUBSCRIPTION_DAYS} дней."
     )
-    await call.message.answer(
+    sent = await call.message.answer(
         "📱 Выберите ваше устройство, чтобы получить инструкцию по установке:",
         reply_markup=install_help_keyboard()
     )
+    await set_last_message(call.from_user.id, sent.message_id)
     await call.answer("Готово!")
 
 
@@ -107,6 +136,7 @@ async def my_sub(call: CallbackQuery):
 
     try:
         await call.message.edit_text(text, reply_markup=main_menu())
+        await set_last_message(call.from_user.id, call.message.message_id)
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
@@ -117,7 +147,6 @@ async def my_sub(call: CallbackQuery):
 
 @router.callback_query(F.data == "help_android")
 async def help_android(call: CallbackQuery):
-    """Инструкция для Android. Заменяет текущее сообщение."""
     text = (
         "🤖 <b>Установка AmneziaWG на Android</b>\n\n"
         "1. Откройте Google Play и установите <b>AmneziaWG</b> (Android 7.0+).\n\n"
@@ -129,10 +158,8 @@ async def help_android(call: CallbackQuery):
         "7. Статус <b>«Подключено»</b> — готово!"
     )
     try:
-        await call.message.edit_text(
-            text, parse_mode="HTML",
-            reply_markup=install_help_keyboard()
-        )
+        await call.message.edit_text(text, parse_mode="HTML", reply_markup=install_help_keyboard())
+        await set_last_message(call.from_user.id, call.message.message_id)
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
@@ -141,7 +168,6 @@ async def help_android(call: CallbackQuery):
 
 @router.callback_query(F.data == "help_ios")
 async def help_ios(call: CallbackQuery):
-    """Инструкция для iOS. Заменяет текущее сообщение."""
     text = (
         "🍎 <b>Установка AmneziaWG на iOS</b>\n\n"
         "1. Откройте App Store и установите <b>AmneziaWG</b> (iOS 15.0+).\n\n"
@@ -154,10 +180,8 @@ async def help_ios(call: CallbackQuery):
         "Используйте <b>DefaultVPN</b> (доступен в РФ) или смените регион."
     )
     try:
-        await call.message.edit_text(
-            text, parse_mode="HTML",
-            reply_markup=install_help_keyboard()
-        )
+        await call.message.edit_text(text, parse_mode="HTML", reply_markup=install_help_keyboard())
+        await set_last_message(call.from_user.id, call.message.message_id)
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
@@ -166,7 +190,6 @@ async def help_ios(call: CallbackQuery):
 
 @router.callback_query(F.data == "help_windows")
 async def help_windows(call: CallbackQuery):
-    """Инструкция для Windows. Заменяет текущее сообщение."""
     text = (
         "🪟 <b>Установка AmneziaWG на Windows</b>\n\n"
         "1. Скачайте <b>AmneziaWG для Windows</b> с amnezia.org/downloads.\n\n"
@@ -176,10 +199,8 @@ async def help_windows(call: CallbackQuery):
         "5. Нажмите <b>«Connect»</b>. Готово!"
     )
     try:
-        await call.message.edit_text(
-            text, parse_mode="HTML",
-            reply_markup=install_help_keyboard()
-        )
+        await call.message.edit_text(text, parse_mode="HTML", reply_markup=install_help_keyboard())
+        await set_last_message(call.from_user.id, call.message.message_id)
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
@@ -188,7 +209,6 @@ async def help_windows(call: CallbackQuery):
 
 @router.callback_query(F.data == "help_macos")
 async def help_macos(call: CallbackQuery):
-    """Инструкция для macOS. Заменяет текущее сообщение."""
     text = (
         "💻 <b>Установка AmneziaWG на macOS</b>\n\n"
         "1. Откройте App Store и установите <b>AmneziaWG</b> (macOS 12.0+).\n\n"
@@ -199,10 +219,8 @@ async def help_macos(call: CallbackQuery):
         "6. Выберите туннель → <b>Activate</b>."
     )
     try:
-        await call.message.edit_text(
-            text, parse_mode="HTML",
-            reply_markup=install_help_keyboard()
-        )
+        await call.message.edit_text(text, parse_mode="HTML", reply_markup=install_help_keyboard())
+        await set_last_message(call.from_user.id, call.message.message_id)
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise

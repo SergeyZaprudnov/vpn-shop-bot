@@ -7,7 +7,7 @@ DB_PATH = os.getenv("DB_PATH", "vpn_bot.db")
 
 
 async def init_db():
-    """Создаёт таблицы users и payments при первом запуске."""
+    """Создаёт таблицы users, payments и last_messages при первом запуске."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -28,6 +28,12 @@ async def init_db():
                 payment_id TEXT UNIQUE,
                 status TEXT DEFAULT 'pending',
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS last_messages (
+                user_id INTEGER PRIMARY KEY,
+                message_id INTEGER
             )
         """)
         await db.commit()
@@ -150,3 +156,23 @@ async def get_all_clients() -> list:
             ORDER BY created_at DESC
         """) as cur:
             return await cur.fetchall()
+
+
+async def set_last_message(user_id: int, message_id: int):
+    """Сохраняет ID последнего сообщения бота для пользователя."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO last_messages (user_id, message_id) VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET message_id=excluded.message_id
+        """, (user_id, message_id))
+        await db.commit()
+
+
+async def get_last_message(user_id: int) -> int | None:
+    """Возвращает ID последнего сообщения бота для пользователя."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT message_id FROM last_messages WHERE user_id=?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else None
