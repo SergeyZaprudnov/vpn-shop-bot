@@ -1,158 +1,173 @@
-"""Обработчики команд и кнопок для обычных пользователей."""
+"""Обработчики админ-панели: статистика, управление клиентами."""
+import aiosqlite
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
-from aiogram.filters import CommandStart
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from database import add_user, get_user, update_subscription
+from database import (
+    get_admin_stats, get_all_clients, get_user,
+    extend_subscription, deactivate_user
+)
 from awg_client import awg
-from payments import create_payment
-from bot.keyboards import main_menu, payment_keyboard, install_help_keyboard
-from config import cfg
+from bot.keyboards import (
+    admin_menu, admin_stats_keyboard,
+    clients_list_keyboard, client_manage_keyboard
+)
+from bot.filters import IsAdmin
 
 router = Router()
 
 
-class BuyState(StatesGroup):
-    """Состояние ожидания имени для VPN-клиента."""
-    waiting_for_name = State()
+class AdminState(StatesGroup):
+    """Состояние ожидания количества дней при продлении."""
+    waiting_for_days = State()
 
 
-@router.message(CommandStart())
-async def cmd_start(message: Message):
-    """Регистрирует пользователя и показывает главное меню."""
-    await add_user(message.from_user.id, message.from_user.username or "unknown")
-    await message.answer("👋 Добро пожаловать!", reply_markup=main_menu())
+@router.message(Command("admin"), IsAdmin())
+async def admin_panel(message: Message):
+    """Открывает админ-панель по команде /admin."""
+    await message.answer("🔐 Админ-панель", reply_markup=admin_menu())
 
 
-@router.callback_query(F.data == "buy_vpn")
-async def buy_vpn(call: CallbackQuery, state: FSMContext):
-    """Запрашивает имя для VPN-клиента."""
-    await call.message.answer("Введите имя для VPN (латиницей):")
-    await state.set_state(BuyState.waiting_for_name)
+@router.callback_query(F.data == "admin_menu", IsAdmin())
+async def back_admin(call: CallbackQuery):
+    """Возврат в главное меню админки."""
+    await call.message.edit_text("🔐 Админ-панель", reply_markup=admin_menu())
     await call.answer()
 
 
-@router.message(BuyState.waiting_for_name)
-async def process_name(message: Message, state: FSMContext):
-    """Создаёт счёт в ЮKassa и отправляет ссылку на оплату."""
-    name = message.text.strip().replace(" ", "_")[:30]
+@router.callback_query(F.data == "admin_stats", IsAdmin())
+async def show_stats(call: CallbackQuery):
+    """Показывает статистику: всего, онлайн, заблокировано, сумма оплат."""
+    s = await get_admin_stats()
+    text = (
+        "📊 <b>Статистика</b>\n\n"
+        f"👥 Всего: <b>{s['total_clients']}</b>\n"
+        f"🟢 Онлайн: <b>{s['online_clients']}</b>\n"
+        f"🔴 Заблок: <b>{s['blocked_clients']}</b>\n"
+        f"💰 Сумма: <b>{s['total_revenue']:.2f} ₽</b>"
+    )
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=admin_stats_keyboard())
+    await call.answer()
+
+
+@router.callback_query(F.data == "admin_clients", IsAdmin())
+async def show_clients(call: CallbackQuery):
+    """Показывает список всех клиентов."""
+    clients = await get_all_clients()
+    if not clients:
+        await call.message.edit_text("Нет клиентов.", reply_markup=admin_menu())
+    else:
+        await call.message.edit_text("👥 Выберите:", reply_markup=clients_list_keyboard(clients))
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("admin_client_"), IsAdmin())
+async def manage_client(call: CallbackQuery):
+    """Карточка клиента с кнопками действий."""
+    uid = int(call.data.split("_")[-1])
+    u = await get_user(uid)
+    if not u or not u["client_id"]:
+        await call.answer("Не найден", show_alert=True)
+        return
+
+    status = "🟢 Активен" if u["is_active"] else "🔴 Заблокирован"
+    text = (
+        f"👤 <b>{u['client_name']}</b>\n\n"
+        f"Статус: {status}\n"
+        f"До: <code>{u['paid_until']}</code>\n"
+        f"ID: <code>{uid}</code>"
+    )
+    await call.message.edit_text(
+        text, parse_mode="HTML",
+        reply_markup=client_manage_keyboard(uid, bool(u["is_active"]))
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("admin_disable_"), IsAdmin())
+async def disable_cb(call: CallbackQuery):
+    """Блокирует клиента."""
+    uid = int(call.data.split("_")[-1])
+    u = await get_user(uid)
+    if u and u["client_id"] and await awg.disable_client(u["client_id"]):
+        await deactivate_user(uid)
+        await call.answer("🔒 Заблокирован")
+        await manage_client(call)
+
+
+@router.callback_query(F.data.startswith("admin_enable_"), IsAdmin())
+async def enable_cb(call: CallbackQuery):
+    """Разблокирует клиента."""
+    uid = int(call.data.split("_")[-1])
+    u = await get_user(uid)
+    if u and u["client_id"] and await awg.enable_client(u["client_id"]):
+        await extend_subscription(uid, 0)
+        await call.answer("🔓 Разблокирован")
+        await manage_client(call)
+
+
+@router.callback_query(F.data.startswith("admin_extend_"), IsAdmin())
+async def extend_fixed(call: CallbackQuery):
+    """Продление на фиксированное число дней (7 или 30)."""
+    parts = call.data.split("_")
+    uid, days = int(parts[2]), int(parts[3])
+    await extend_subscription(uid, days)
+    u = await get_user(uid)
+    if u and u["client_id"]:
+        await awg.enable_client(u["client_id"])
+    await call.answer(f"⏳ +{days} дней")
+    await manage_client(call)
+
+
+@router.callback_query(F.data.startswith("admin_extend_custom_"), IsAdmin())
+async def extend_custom_start(call: CallbackQuery, state: FSMContext):
+    """Запрашивает произвольное число дней."""
+    uid = int(call.data.split("_")[-1])
+    await state.update_data(uid=uid)
+    await state.set_state(AdminState.waiting_for_days)
+    await call.message.edit_text(
+        "Введите количество дней:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="◀️ Отмена", callback_data=f"admin_client_{uid}")
+        ]])
+    )
+    await call.answer()
+
+
+@router.message(AdminState.waiting_for_days, IsAdmin())
+async def extend_custom_finish(message: Message, state: FSMContext):
+    """Обрабатывает ввод количества дней."""
+    try:
+        days = int(message.text.strip())
+        if days <= 0 or days > 3650:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Введите число от 1 до 3650:")
+        return
+
+    data = await state.get_data()
+    uid = data["uid"]
     await state.clear()
-    payment = create_payment(message.from_user.id)
-    if payment:
-        await message.answer(
-            f"💳 Счёт на {cfg.PAYMENT_PRICE} ₽",
-            reply_markup=payment_keyboard(payment["confirmation_url"])
-        )
-    else:
-        await message.answer("❌ Ошибка платежа")
+    await extend_subscription(uid, days)
+
+    u = await get_user(uid)
+    if u and u["client_id"]:
+        await awg.enable_client(u["client_id"])
+    await message.answer(f"✅ Продлён на {days} дней")
 
 
-@router.callback_query(F.data == "check_payment")
-async def check_payment_cb(call: CallbackQuery):
-    """Проверяет оплату и выдаёт конфиг (в продакшене — через вебхук)."""
-    user = await get_user(call.from_user.id)
-    if not user:
-        await call.answer("Сначала создайте платёж", show_alert=True)
-        return
-
-    client_name = f"user_{call.from_user.id}"
-    client = await awg.create_client(client_name)
-    if not client:
-        await call.message.answer("❌ Ошибка создания клиента")
-        return
-
-    config_text = await awg.get_client_config(client["id"])
-    if not config_text:
-        await call.message.answer("❌ Ошибка получения конфига")
-        return
-
-    await update_subscription(call.from_user.id, client_name, client["id"], cfg.SUBSCRIPTION_DAYS)
-    await call.message.answer_document(
-        document=("vpn.conf", config_text.encode()),
-        caption=f"✅ Оплата получена! Ваш VPN-конфиг на {cfg.SUBSCRIPTION_DAYS} дней."
-    )
-    await call.message.answer(
-        "📱 Выберите ваше устройство, чтобы получить инструкцию по установке:",
-        reply_markup=install_help_keyboard()
-    )
-
-
-@router.callback_query(F.data == "my_sub")
-async def my_sub(call: CallbackQuery):
-    """Показывает дату окончания подписки."""
-    user = await get_user(call.from_user.id)
-    if user and user["is_active"]:
-        await call.message.answer(f"📋 Активна до: {user['paid_until']}")
-    else:
-        await call.message.answer("Нет активной подписки.")
-    await call.answer()
-
-
-# ---------- Инструкции по платформам ----------
-
-@router.callback_query(F.data == "help_android")
-async def help_android(call: CallbackQuery):
-    """Инструкция для Android."""
-    text = (
-        "🤖 <b>Установка AmneziaWG на Android</b>\n\n"
-        "1. Откройте Google Play и установите <b>AmneziaWG</b> (Android 7.0+).\n\n"
-        "2. Скачайте <code>vpn.conf</code> из этого чата (папка «Загрузки»).\n\n"
-        "3. Откройте AmneziaWG → иконка <b>➕</b> справа снизу.\n\n"
-        "4. Выберите <b>«Импорт из файла или архива»</b>.\n\n"
-        "5. Найдите <code>vpn.conf</code> и выберите его.\n\n"
-        "6. Нажмите переключатель справа от названия подключения.\n\n"
-        "7. Статус <b>«Подключено»</b> — готово!"
-    )
-    await call.message.answer(text, parse_mode="HTML")
-    await call.answer()
-
-
-@router.callback_query(F.data == "help_ios")
-async def help_ios(call: CallbackQuery):
-    """Инструкция для iOS (с упоминанием DefaultVPN для РФ)."""
-    text = (
-        "🍎 <b>Установка AmneziaWG на iOS</b>\n\n"
-        "1. Откройте App Store и установите <b>AmneziaWG</b> (iOS 15.0+).\n\n"
-        "2. Скачайте <code>vpn.conf</code> из этого чата.\n\n"
-        "3. Откройте AmneziaWG → иконка <b>➕</b>.\n\n"
-        "4. Выберите <b>«Импорт из файла»</b> и найдите <code>vpn.conf</code>.\n\n"
-        "5. После импорта нажмите переключатель для подключения.\n\n"
-        "⚠️ <b>Если App Store не открывается:</b>\n"
-        "В российском App Store приложение недоступно. "
-        "Используйте <b>DefaultVPN</b> (доступен в РФ) или смените регион."
-    )
-    await call.message.answer(text, parse_mode="HTML")
-    await call.answer()
-
-
-@router.callback_query(F.data == "help_windows")
-async def help_windows(call: CallbackQuery):
-    """Инструкция для Windows."""
-    text = (
-        "🪟 <b>Установка AmneziaWG на Windows</b>\n\n"
-        "1. Скачайте <b>AmneziaWG для Windows</b> с amnezia.org/downloads.\n\n"
-        "2. Сохраните <code>vpn.conf</code> в удобную папку (например, <code>C:\\VPN</code>).\n\n"
-        "3. Запустите AmneziaWG.\n\n"
-        "4. Нажмите <b>«Import Configuration»</b> и выберите файл.\n\n"
-        "5. Нажмите <b>«Connect»</b>. Готово!"
-    )
-    await call.message.answer(text, parse_mode="HTML")
-    await call.answer()
-
-
-@router.callback_query(F.data == "help_macos")
-async def help_macos(call: CallbackQuery):
-    """Инструкция для macOS."""
-    text = (
-        "💻 <b>Установка AmneziaWG на macOS</b>\n\n"
-        "1. Откройте App Store и установите <b>AmneziaWG</b> (macOS 12.0+).\n\n"
-        "2. Скачайте <code>vpn.conf</code> из этого чата.\n\n"
-        "3. Откройте AmneziaWG → <b>«Import tunnel(s) from file»</b>.\n\n"
-        "4. Найдите <code>vpn.conf</code> → <b>Import</b>.\n\n"
-        "5. Разрешите добавление VPN-конфигурации (<b>Allow</b>).\n\n"
-        "6. Выберите туннель → <b>Activate</b>."
-    )
-    await call.message.answer(text, parse_mode="HTML")
-    await call.answer()
+@router.callback_query(F.data.startswith("admin_delete_"), IsAdmin())
+async def delete_cb(call: CallbackQuery):
+    """Удаляет клиента из панели и БД."""
+    uid = int(call.data.split("_")[-1])
+    u = await get_user(uid)
+    if u and u["client_id"]:
+        await awg.delete_client(u["client_id"])
+        async with aiosqlite.connect("vpn_bot.db") as db:
+            await db.execute("DELETE FROM users WHERE user_id=?", (uid,))
+            await db.commit()
+        await call.answer("🗑 Удалён")
+        await show_clients(call)
