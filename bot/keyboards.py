@@ -1,7 +1,9 @@
+"""Inline-клавиатуры для пользователя и администратора."""
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 
 def main_menu() -> InlineKeyboardMarkup:
+    """Главное меню пользователя."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💳 Купить VPN", callback_data="buy_vpn")],
         [InlineKeyboardButton(text="📋 Моя подписка", callback_data="my_sub")],
@@ -9,6 +11,7 @@ def main_menu() -> InlineKeyboardMarkup:
 
 
 def payment_keyboard(url: str) -> InlineKeyboardMarkup:
+    """Клавиатура после создания счёта: ссылка на оплату + проверка."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Оплатить", url=url)],
         [InlineKeyboardButton(text="Я оплатил", callback_data="check_payment")],
@@ -16,6 +19,7 @@ def payment_keyboard(url: str) -> InlineKeyboardMarkup:
 
 
 def install_help_keyboard() -> InlineKeyboardMarkup:
+    """4 кнопки с инструкциями по платформам."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🤖 Android", callback_data="help_android")],
         [InlineKeyboardButton(text="🍎 iOS", callback_data="help_ios")],
@@ -25,6 +29,7 @@ def install_help_keyboard() -> InlineKeyboardMarkup:
 
 
 def admin_menu() -> InlineKeyboardMarkup:
+    """Главное меню администратора."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 Общая статистика", callback_data="admin_stats")],
         [InlineKeyboardButton(text="👥 Управление клиентами", callback_data="admin_clients")],
@@ -32,6 +37,7 @@ def admin_menu() -> InlineKeyboardMarkup:
 
 
 def admin_stats_keyboard() -> InlineKeyboardMarkup:
+    """Кнопки под статистикой: обновить и назад."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_stats")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_menu")],
@@ -39,6 +45,7 @@ def admin_stats_keyboard() -> InlineKeyboardMarkup:
 
 
 def clients_list_keyboard(clients: list) -> InlineKeyboardMarkup:
+    """Список клиентов с эмодзи статуса (🟢/🔴)."""
     buttons = []
     for c in clients:
         status = "🟢" if c["is_active"] else "🔴"
@@ -53,6 +60,7 @@ def clients_list_keyboard(clients: list) -> InlineKeyboardMarkup:
 
 
 def client_manage_keyboard(user_id: int, is_active: bool) -> InlineKeyboardMarkup:
+    """Кнопки управления конкретным клиентом."""
     status_btn = "🔓 Разблокировать" if not is_active else "🔒 Заблокировать"
     status_action = "enable" if not is_active else "disable"
     return InlineKeyboardMarkup(inline_keyboard=[
