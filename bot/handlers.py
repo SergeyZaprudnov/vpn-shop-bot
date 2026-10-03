@@ -1,10 +1,11 @@
+"""Обработчики команд и кнопок для обычных пользователей."""
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from database import add_user, get_user, update_subscription, record_payment
+from database import add_user, get_user, update_subscription
 from awg_client import awg
 from payments import create_payment
 from bot.keyboards import main_menu, payment_keyboard, install_help_keyboard
@@ -14,17 +15,20 @@ router = Router()
 
 
 class BuyState(StatesGroup):
+    """Состояние ожидания имени для VPN-клиента."""
     waiting_for_name = State()
 
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
+    """Регистрирует пользователя и показывает главное меню."""
     await add_user(message.from_user.id, message.from_user.username or "unknown")
     await message.answer("👋 Добро пожаловать!", reply_markup=main_menu())
 
 
 @router.callback_query(F.data == "buy_vpn")
 async def buy_vpn(call: CallbackQuery, state: FSMContext):
+    """Запрашивает имя для VPN-клиента."""
     await call.message.answer("Введите имя для VPN (латиницей):")
     await state.set_state(BuyState.waiting_for_name)
     await call.answer()
@@ -32,6 +36,7 @@ async def buy_vpn(call: CallbackQuery, state: FSMContext):
 
 @router.message(BuyState.waiting_for_name)
 async def process_name(message: Message, state: FSMContext):
+    """Создаёт счёт в ЮKassa и отправляет ссылку на оплату."""
     name = message.text.strip().replace(" ", "_")[:30]
     await state.clear()
     payment = create_payment(message.from_user.id)
@@ -46,6 +51,7 @@ async def process_name(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "check_payment")
 async def check_payment_cb(call: CallbackQuery):
+    """Проверяет оплату и выдаёт конфиг (в продакшене — через вебхук)."""
     user = await get_user(call.from_user.id)
     if not user:
         await call.answer("Сначала создайте платёж", show_alert=True)
@@ -75,6 +81,7 @@ async def check_payment_cb(call: CallbackQuery):
 
 @router.callback_query(F.data == "my_sub")
 async def my_sub(call: CallbackQuery):
+    """Показывает дату окончания подписки."""
     user = await get_user(call.from_user.id)
     if user and user["is_active"]:
         await call.message.answer(f"📋 Активна до: {user['paid_until']}")
@@ -83,10 +90,11 @@ async def my_sub(call: CallbackQuery):
     await call.answer()
 
 
-# ---------- Инструкции ----------
+# ---------- Инструкции по платформам ----------
 
 @router.callback_query(F.data == "help_android")
 async def help_android(call: CallbackQuery):
+    """Инструкция для Android."""
     text = (
         "🤖 <b>Установка AmneziaWG на Android</b>\n\n"
         "1. Откройте Google Play и установите <b>AmneziaWG</b> (Android 7.0+).\n\n"
@@ -103,6 +111,7 @@ async def help_android(call: CallbackQuery):
 
 @router.callback_query(F.data == "help_ios")
 async def help_ios(call: CallbackQuery):
+    """Инструкция для iOS (с упоминанием DefaultVPN для РФ)."""
     text = (
         "🍎 <b>Установка AmneziaWG на iOS</b>\n\n"
         "1. Откройте App Store и установите <b>AmneziaWG</b> (iOS 15.0+).\n\n"
@@ -120,6 +129,7 @@ async def help_ios(call: CallbackQuery):
 
 @router.callback_query(F.data == "help_windows")
 async def help_windows(call: CallbackQuery):
+    """Инструкция для Windows."""
     text = (
         "🪟 <b>Установка AmneziaWG на Windows</b>\n\n"
         "1. Скачайте <b>AmneziaWG для Windows</b> с amnezia.org/downloads.\n\n"
@@ -134,6 +144,7 @@ async def help_windows(call: CallbackQuery):
 
 @router.callback_query(F.data == "help_macos")
 async def help_macos(call: CallbackQuery):
+    """Инструкция для macOS."""
     text = (
         "💻 <b>Установка AmneziaWG на macOS</b>\n\n"
         "1. Откройте App Store и установите <b>AmneziaWG</b> (macOS 12.0+).\n\n"
