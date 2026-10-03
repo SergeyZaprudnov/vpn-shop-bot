@@ -34,7 +34,7 @@ async def admin_panel(message: Message):
 
 @router.callback_query(F.data == "admin_menu", IsAdmin())
 async def back_admin(call: CallbackQuery):
-    """Возврат в главное меню админки."""
+    """Возврат в главное меню админки. Заменяет текущее сообщение."""
     try:
         await call.message.edit_text("🔐 Админ-панель", reply_markup=admin_menu())
     except TelegramBadRequest as e:
@@ -62,15 +62,14 @@ async def show_stats(call: CallbackQuery):
     except TelegramBadRequest as e:
         if "message is not modified" in str(e):
             await call.answer("Данные не изменились")
-        else:
-            raise
-    else:
-        await call.answer("Статистика обновлена")
+            return
+        raise
+    await call.answer("Статистика обновлена")
 
 
 @router.callback_query(F.data == "admin_clients", IsAdmin())
 async def show_clients(call: CallbackQuery):
-    """Показывает список всех клиентов."""
+    """Показывает список всех клиентов. Заменяет текущее сообщение."""
     clients = await get_all_clients()
     if not clients:
         text = "Нет клиентов."
@@ -89,7 +88,7 @@ async def show_clients(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("admin_client_"), IsAdmin())
 async def manage_client(call: CallbackQuery):
-    """Карточка клиента с кнопками действий."""
+    """Карточка клиента с кнопками действий. Заменяет текущее сообщение."""
     uid = int(call.data.split("_")[-1])
     u = await get_user(uid)
     if not u or not u["client_id"]:
@@ -174,7 +173,7 @@ async def extend_custom_start(call: CallbackQuery, state: FSMContext):
 
 @router.message(AdminState.waiting_for_days, IsAdmin())
 async def extend_custom_finish(message: Message, state: FSMContext):
-    """Обрабатывает ввод количества дней."""
+    """Обрабатывает ввод количества дней. Отправляет новое сообщение."""
     try:
         days = int(message.text.strip())
         if days <= 0 or days > 3650:

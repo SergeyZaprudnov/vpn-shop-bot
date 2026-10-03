@@ -1,8 +1,10 @@
+"""Обработчики команд и кнопок для обычных пользователей."""
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramBadRequest
 
 from database import add_user, get_user, update_subscription
 from awg_client import awg
@@ -17,6 +19,7 @@ router = Router()
 
 
 class BuyState(StatesGroup):
+    """Состояние ожидания имени для VPN-клиента."""
     waiting_for_name = State()
 
 
@@ -36,13 +39,20 @@ async def cmd_start(message: Message):
 
 @router.callback_query(F.data == "buy_vpn")
 async def buy_vpn(call: CallbackQuery, state: FSMContext):
-    await call.message.answer("Введите имя для VPN (латиницей):")
+    """Запрашивает имя для VPN-клиента. Заменяет текущее сообщение."""
+    try:
+        await call.message.edit_text("Введите имя для VPN (латиницей):")
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
     await state.set_state(BuyState.waiting_for_name)
     await call.answer()
 
 
 @router.message(BuyState.waiting_for_name)
 async def process_name(message: Message, state: FSMContext):
+    """Создаёт счёт в ЮKassa и отправляет ссылку на оплату.
+    Здесь используется answer, так как пользователь ввёл новое текстовое сообщение."""
     name = message.text.strip().replace(" ", "_")[:30]
     await state.clear()
     payment = create_payment(message.from_user.id)
@@ -57,6 +67,7 @@ async def process_name(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "check_payment")
 async def check_payment_cb(call: CallbackQuery):
+    """Проверяет оплату и выдаёт конфиг."""
     user = await get_user(call.from_user.id)
     if not user:
         await call.answer("Сначала создайте платёж", show_alert=True)
@@ -65,12 +76,12 @@ async def check_payment_cb(call: CallbackQuery):
     client_name = f"user_{call.from_user.id}"
     client = await awg.create_client(client_name)
     if not client:
-        await call.message.answer("❌ Ошибка создания клиента")
+        await call.answer("❌ Ошибка создания клиента", show_alert=True)
         return
 
     config_text = await awg.get_client_config(client["id"])
     if not config_text:
-        await call.message.answer("❌ Ошибка получения конфига")
+        await call.answer("❌ Ошибка получения конфига", show_alert=True)
         return
 
     await update_subscription(call.from_user.id, client_name, client["id"], cfg.SUBSCRIPTION_DAYS)
@@ -82,22 +93,31 @@ async def check_payment_cb(call: CallbackQuery):
         "📱 Выберите ваше устройство, чтобы получить инструкцию по установке:",
         reply_markup=install_help_keyboard()
     )
+    await call.answer("Готово!")
 
 
 @router.callback_query(F.data == "my_sub")
 async def my_sub(call: CallbackQuery):
+    """Показывает дату окончания подписки. Заменяет текущее сообщение."""
     user = await get_user(call.from_user.id)
     if user and user["is_active"]:
-        await call.message.answer(f"📋 Активна до: {user['paid_until']}")
+        text = f"📋 Активна до: {user['paid_until']}"
     else:
-        await call.message.answer("Нет активной подписки.")
+        text = "Нет активной подписки."
+
+    try:
+        await call.message.edit_text(text, reply_markup=main_menu())
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
     await call.answer()
 
 
-# ---------- Инструкции ----------
+# ---------- Инструкции по платформам ----------
 
 @router.callback_query(F.data == "help_android")
 async def help_android(call: CallbackQuery):
+    """Инструкция для Android. Заменяет текущее сообщение."""
     text = (
         "🤖 <b>Установка AmneziaWG на Android</b>\n\n"
         "1. Откройте Google Play и установите <b>AmneziaWG</b> (Android 7.0+).\n\n"
@@ -108,12 +128,20 @@ async def help_android(call: CallbackQuery):
         "6. Нажмите переключатель справа от названия подключения.\n\n"
         "7. Статус <b>«Подключено»</b> — готово!"
     )
-    await call.message.answer(text, parse_mode="HTML")
+    try:
+        await call.message.edit_text(
+            text, parse_mode="HTML",
+            reply_markup=install_help_keyboard()
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
     await call.answer()
 
 
 @router.callback_query(F.data == "help_ios")
 async def help_ios(call: CallbackQuery):
+    """Инструкция для iOS. Заменяет текущее сообщение."""
     text = (
         "🍎 <b>Установка AmneziaWG на iOS</b>\n\n"
         "1. Откройте App Store и установите <b>AmneziaWG</b> (iOS 15.0+).\n\n"
@@ -125,12 +153,20 @@ async def help_ios(call: CallbackQuery):
         "В российском App Store приложение недоступно. "
         "Используйте <b>DefaultVPN</b> (доступен в РФ) или смените регион."
     )
-    await call.message.answer(text, parse_mode="HTML")
+    try:
+        await call.message.edit_text(
+            text, parse_mode="HTML",
+            reply_markup=install_help_keyboard()
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
     await call.answer()
 
 
 @router.callback_query(F.data == "help_windows")
 async def help_windows(call: CallbackQuery):
+    """Инструкция для Windows. Заменяет текущее сообщение."""
     text = (
         "🪟 <b>Установка AmneziaWG на Windows</b>\n\n"
         "1. Скачайте <b>AmneziaWG для Windows</b> с amnezia.org/downloads.\n\n"
@@ -139,12 +175,20 @@ async def help_windows(call: CallbackQuery):
         "4. Нажмите <b>«Import Configuration»</b> и выберите файл.\n\n"
         "5. Нажмите <b>«Connect»</b>. Готово!"
     )
-    await call.message.answer(text, parse_mode="HTML")
+    try:
+        await call.message.edit_text(
+            text, parse_mode="HTML",
+            reply_markup=install_help_keyboard()
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
     await call.answer()
 
 
 @router.callback_query(F.data == "help_macos")
 async def help_macos(call: CallbackQuery):
+    """Инструкция для macOS. Заменяет текущее сообщение."""
     text = (
         "💻 <b>Установка AmneziaWG на macOS</b>\n\n"
         "1. Откройте App Store и установите <b>AmneziaWG</b> (macOS 12.0+).\n\n"
@@ -154,5 +198,12 @@ async def help_macos(call: CallbackQuery):
         "5. Разрешите добавление VPN-конфигурации (<b>Allow</b>).\n\n"
         "6. Выберите туннель → <b>Activate</b>."
     )
-    await call.message.answer(text, parse_mode="HTML")
+    try:
+        await call.message.edit_text(
+            text, parse_mode="HTML",
+            reply_markup=install_help_keyboard()
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
     await call.answer()
