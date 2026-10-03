@@ -1,3 +1,4 @@
+"""Создание платежей через ЮKassa (Касса)."""
 import uuid
 import logging
 from yookassa import Configuration, Payment
@@ -9,7 +10,10 @@ Configuration.secret_key = cfg.YOOKASSA_SECRET_KEY
 
 
 def create_payment(user_id: int) -> dict | None:
-    """Создаёт платёж в ЮKassa, возвращает {payment_id, confirmation_url}"""
+    """
+    Создаёт платёж в ЮKassa и возвращает {payment_id, confirmation_url}.
+    confirmation_url — ссылка на страницу оплаты, которую получает пользователь.
+    """
     try:
         idempotence_key = str(uuid.uuid4())
         payment_data = {
@@ -26,7 +30,7 @@ def create_payment(user_id: int) -> dict | None:
             "metadata": {"user_id": str(user_id)}
         }
 
-        # Чеки по 54-ФЗ (для самозанятых)
+        # Чеки по 54-ФЗ (для самозанятых и ИП)
         if cfg.YOOKASSA_ENABLE_RECEIPTS and cfg.YOOKASSA_INN:
             payment_data["receipt"] = {
                 "customer": {"email": cfg.YOOKASSA_DEFAULT_RECEIPT_EMAIL},
@@ -51,7 +55,7 @@ def create_payment(user_id: int) -> dict | None:
 
 
 def check_payment(payment_id: str) -> str:
-    """Проверяет статус платежа: pending / succeeded / canceled"""
+    """Проверяет статус платежа: pending / succeeded / canceled."""
     try:
         payment = Payment.find_one(payment_id)
         return payment.status
