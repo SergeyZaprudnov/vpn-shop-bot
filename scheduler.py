@@ -1,3 +1,4 @@
+"""Планировщик задач: напоминания об оплате и автоблокировка просроченных."""
 import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiogram import Bot
@@ -10,7 +11,10 @@ scheduler = AsyncIOScheduler()
 
 
 def setup_scheduler(bot: Bot):
+    """Регистрирует cron-задачи: напоминание в 10:00, блокировка в 00:05."""
+
     async def remind():
+        """Напоминает пользователям за N дней до окончания подписки."""
         users = await get_expiring_users(cfg.REMINDER_DAYS_BEFORE)
         for u in users:
             try:
@@ -22,6 +26,7 @@ def setup_scheduler(bot: Bot):
                 pass
 
     async def block_expired():
+        """Блокирует клиентов с истёкшей подпиской."""
         users = await get_expired_users()
         for u in users:
             if u["client_id"] and await awg.disable_client(u["client_id"]):
