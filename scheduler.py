@@ -1,6 +1,4 @@
 import logging
-from sched import scheduler
-
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiogram import Bot
 from database import get_expiring_users, get_expired_users, deactivate_user
@@ -10,12 +8,16 @@ from config import cfg
 logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
 
+
 def setup_scheduler(bot: Bot):
     async def remind():
         users = await get_expiring_users(cfg.REMINDER_DAYS_BEFORE)
         for u in users:
             try:
-                await bot.send_message(u["user_id"], f"⏰ Подписка истекает через {cfg.REMINDER_DAYS_BEFORE} дней. Продлите!")
+                await bot.send_message(
+                    u["user_id"],
+                    f"⏰ Подписка истекает через {cfg.REMINDER_DAYS_BEFORE} дней. Продлите!"
+                )
             except Exception:
                 pass
 
@@ -25,7 +27,10 @@ def setup_scheduler(bot: Bot):
             if u["client_id"] and await awg.disable_client(u["client_id"]):
                 await deactivate_user(u["user_id"])
                 try:
-                    await bot.send_message(u["user_id"], "🚫 Подписка стекла. Доступ приостановлен.")
+                    await bot.send_message(
+                        u["user_id"],
+                        "🚫 Подписка истекла. Доступ приостановлен."
+                    )
                 except Exception:
                     pass
 
