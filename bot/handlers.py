@@ -7,7 +7,10 @@ from aiogram.fsm.state import State, StatesGroup
 from database import add_user, get_user, update_subscription
 from awg_client import awg
 from payments import create_payment
-from bot.keyboards import main_menu, payment_keyboard, install_help_keyboard
+from bot.keyboards import (
+    main_menu, payment_keyboard, install_help_keyboard,
+    admin_menu
+)
 from config import cfg
 
 router = Router()
@@ -19,6 +22,14 @@ class BuyState(StatesGroup):
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
+    """При /start: админ видит админ-панель, пользователь — меню покупки."""
+    if message.from_user.id == cfg.ADMIN_ID:
+        await message.answer(
+            "🔐 Админ-панель\n\nВыберите действие:",
+            reply_markup=admin_menu()
+        )
+        return
+
     await add_user(message.from_user.id, message.from_user.username or "unknown")
     await message.answer("👋 Добро пожаловать!", reply_markup=main_menu())
 
