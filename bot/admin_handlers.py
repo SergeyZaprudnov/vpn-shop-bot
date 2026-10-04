@@ -29,4 +29,206 @@ class AdminState(StatesGroup):
 
 async def safe_edit(call: CallbackQuery, text: str,
                     reply_markup=None, parse_mode="HTML"):
-    """Удаляет предыдущее сообщение бота и редактирует/отправляет новое."""
+    """Удаляет предыдущее сообщение бота и редактирует/отправляет новое.
+    Гарантирует, что в чате всегда одно актуальное сообщение админ-панели."""
+    user_id = call.from_user.id
+    last_id = await get_last_message(user_id)
+
+    if last_id and last_id != call.message.message_id:
+        try:
+            await call.bot.delete_message(chat_id=user_id, message_id=last_id)
+        except Exception:
+            pass
+
+    try:
+        await call.message.edit_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        await set_last_message(user_id, call.message.message_id)
+        return
+    except TelegramBadRequest as e:
+        err = str(e)
+        if "message is not modified" in err:
+            await set_last_message(user_id, call.message.message_id)
+            return
+        if "message to edit not found" in err or "message can't be edited" in err:
+            pass
+        else:
+            raise
+
+    sent = await call.message.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
+    await set_last_message(user_id, sent.message_id)
+
+
+@router.message(Command("admin"), IsAdmin())
+async def admin_panel(message: Message):
+    """Открывает админ-панель по команде /admin."""
+    sent = await message.answer("🔐 Админ-панель", reply_markup=admin_menu())
+    await set_last_message(message.from_user.id, sent.message_id)
+
+
+@router.callback_query(F.data == "admin_menu", IsAdmin())
+async def back_admin(call: CallbackQuery):
+    """Возврат в главное меню админки."""
+    await safe_edit(call, "🔐 Админ-панель", reply_markup=admin_menu())
+    await call.answer()
+
+
+@router.callback_query(F.data == "admin_stats", IsAdmin())
+async def show_stats(call: CallbackQuery):
+    """Показывает статистику: всего, онлайн, заблокировано, сумма оплат."""
+    s = await get_admin_stats()
+    text = (
+        "📊 <b>Статистика</b>\n\n"
+        f"👥 Всего: <b>{s['total_clients']}</b>\n"
+        f"🟢 Онлайн: <b>{s['online_clients']}</b>\n"
+        f"🔴 Заблок: <b>{s['blocked_clients']}</b>\n"
+        f"💰 Сумма: <b>{s['total_revenue']:.2f} ₽</b>"
+    )
+    await safe_edit(call, text, reply_markup=admin_stats_keyboard())
+    await call.answer("Статистика обновлена")
+
+
+@router.callback_query(F.data == "admin_clients", IsAdmin())
+async def show_clients(call: CallbackQuery):
+    """Показывает список всех клиентов из БД (для управления)."""
+    clients = await get_all_clients()
+    if not clients:
+        await safe_edit(call, "Нет клиентов.", reply_markup=admin_menu())
+    else:
+        await safe_edit(call, "👥 Выберите:", reply_markup=clients_list_keyboard(clients))
+    await call.answer()
+
+
+@router.callback_query(F.data == "admin_configs", IsAdmin())
+async def show_all_configs(call: CallbackQuery):
+    """Показывает список ВСЕХ конфигов из панели AmneziaWG (включая созданные вручную)."""
+    clients = await awg.get_clients()
+    if not clients:
+        await safe_edit(call, "📋 Нет созданных конфигов.", reply_markup=admin_menu())
+        await call.answer()
+        return
+
+    lines = []
+    for i, c in enumerate(clients, 1):
+        status = "🟢" if c.get("enabled") else "🔴"
+        name = c.get("name", "—")
+        address = c.get("address", "—")
+        lines.append(
+            f"{i}. {status} <b>{name}</b>\n"
+            f"    IP: <code>{address}</code>"
+        )
+
+    text = "📋 <b>Все конфиги из AmneziaWG</b>\n\n" + "\n\n".join(lines)
+    await safe_edit(call, text, reply_markup=admin_menu())
+    await call.answer(f"Всего: {len(clients)}")
+
+
+@router.callback_query(F.data.startswith("admin_client_"), IsAdmin())
+async def manage_client(call: CallbackQuery):
+    """Карточка клиента с кнопками действий."""
+    uid = int(call.data.split("_")[-1])
+    u = await get_user(uid)
+    if not u or not u["client_id"]:
+        await call.answer("Не найден", show_alert=True)
+        return
+
+    status = "🟢 Активен" if u["is_active"] else "🔴 Заблокирован"
+    text = (
+        f"👤 <b>{u['client_name']}</b>\n\n"
+        f"Статус: {status}\n"
+        f"До: <code>{u['paid_until']}</code>\n"
+        f"ID: <code>{uid}</code>"
+    )
+    await safe_edit(call, text, reply_markup=client_manage_keyboard(uid, bool(u["is_active"])))
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("admin_disable_"), IsAdmin())
+async def disable_cb(call: CallbackQuery):
+    """Блокирует клиента."""
+    uid = int(call.data.split("_")[-1])
+    u = await get_user(uid)
+    if u and u["client_id"] and await awg.disable_client(u["client_id"]):
+        await deactivate_user(uid)
+        await call.answer("🔒 Заблокирован")
+        await manage_client(call)
+    else:
+        await call.answer("❌ Ошибка блокировки", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_enable_"), IsAdmin())
+async def enable_cb(call: CallbackQuery):
+    """Разблокирует клиента."""
+    uid = int(call.data.split("_")[-1])
+    u = await get_user(uid)
+    if u and u["client_id"] and await awg.enable_client(u["client_id"]):
+        await extend_subscription(uid, 0)
+        await call.answer("🔓 Разблокирован")
+        await manage_client(call)
+    else:
+        await call.answer("❌ Ошибка разблокировки", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_extend_"), IsAdmin())
+async def extend_fixed(call: CallbackQuery):
+    """Продление на фиксированное число дней (7 или 30)."""
+    parts = call.data.split("_")
+    uid, days = int(parts[2]), int(parts[3])
+    await extend_subscription(uid, days)
+    u = await get_user(uid)
+    if u and u["client_id"]:
+        await awg.enable_client(u["client_id"])
+    await call.answer(f"⏳ +{days} дней")
+    await manage_client(call)
+
+
+@router.callback_query(F.data.startswith("admin_extend_custom_"), IsAdmin())
+async def extend_custom_start(call: CallbackQuery, state: FSMContext):
+    """Запрашивает произвольное число дней."""
+    uid = int(call.data.split("_")[-1])
+    await state.update_data(uid=uid)
+    await state.set_state(AdminState.waiting_for_days)
+    await safe_edit(
+        call, "Введите количество дней:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="◀️ Отмена", callback_data=f"admin_client_{uid}")
+        ]])
+    )
+    await call.answer()
+
+
+@router.message(AdminState.waiting_for_days, IsAdmin())
+async def extend_custom_finish(message: Message, state: FSMContext):
+    """Обрабатывает ввод количества дней."""
+    try:
+        days = int(message.text.strip())
+        if days <= 0 or days > 3650:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Введите число от 1 до 3650:")
+        return
+
+    data = await state.get_data()
+    uid = data["uid"]
+    await state.clear()
+    await extend_subscription(uid, days)
+
+    u = await get_user(uid)
+    if u and u["client_id"]:
+        await awg.enable_client(u["client_id"])
+    await message.answer(f"✅ Продлён на {days} дней")
+
+
+@router.callback_query(F.data.startswith("admin_delete_"), IsAdmin())
+async def delete_cb(call: CallbackQuery):
+    """Удаляет клиента из панели и БД."""
+    uid = int(call.data.split("_")[-1])
+    u = await get_user(uid)
+    if u and u["client_id"]:
+        await awg.delete_client(u["client_id"])
+        async with aiosqlite.connect("vpn_bot.db") as db:
+            await db.execute("DELETE FROM users WHERE user_id=?", (uid,))
+            await db.commit()
+        await call.answer("🗑 Удалён")
+        await show_clients(call)
+    else:
+        await call.answer("Клиент не найден", show_alert=True)
