@@ -13,6 +13,7 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
+                first_name TEXT,
                 client_name TEXT UNIQUE,
                 client_id TEXT,
                 paid_until TEXT,
@@ -39,13 +40,15 @@ async def init_db():
         await db.commit()
 
 
-async def add_user(user_id: int, username: str):
-    """Добавляет пользователя или игнорирует дубликат."""
+async def add_user(user_id: int, username: str, first_name: str = ""):
+    """Добавляет пользователя или обновляет его имя."""
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)",
-            (user_id, username)
-        )
+        await db.execute("""
+            INSERT INTO users (user_id, username, first_name) VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                username=excluded.username,
+                first_name=excluded.first_name
+        """, (user_id, username, first_name))
         await db.commit()
 
 
@@ -151,7 +154,7 @@ async def get_all_clients() -> list:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("""
-            SELECT user_id, username, client_name, client_id, paid_until, is_active
+            SELECT user_id, username, first_name, client_name, client_id, paid_until, is_active
             FROM users WHERE client_id IS NOT NULL
             ORDER BY created_at DESC
         """) as cur:

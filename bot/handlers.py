@@ -26,37 +26,36 @@ class BuyState(StatesGroup):
     waiting_for_name = State()
 
 
-async def safe_reply(message: Message, user_id: int, text: str,
-                     reply_markup=None, parse_mode="HTML"):
-    """Удаляет предыдущее сообщение бота и отправляет новое."""
-    last_id = await get_last_message(user_id)
-    if last_id and last_id != message.message_id:
-        try:
-            await message.bot.delete_message(chat_id=user_id, message_id=last_id)
-        except Exception:
-            pass
-    sent = await message.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
-    await set_last_message(user_id, sent.message_id)
-    return sent
-
-
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     """При /start: админ видит админ-панель, пользователь — меню покупки."""
+    name = message.from_user.first_name or "друг"
+
     if message.from_user.id == cfg.ADMIN_ID:
         await message.answer(
-            "🔐 Админ-панель\n\nВыберите действие:",
+            f"👋 Привет, <b>{name}</b>!\n\n"
+            "🔐 Админ-панель\nВыберите действие:",
+            parse_mode="HTML",
             reply_markup=admin_menu()
         )
         return
 
-    await add_user(message.from_user.id, message.from_user.username or "unknown")
-    await message.answer("👋 Добро пожаловать!", reply_markup=main_menu())
+    await add_user(
+        message.from_user.id,
+        message.from_user.username or "unknown",
+        message.from_user.first_name or ""
+    )
+    await message.answer(
+        f"👋 Привет, <b>{name}</b>!\n\n"
+        "Здесь вы можете купить VPN-подписку на 30 дней.",
+        parse_mode="HTML",
+        reply_markup=main_menu()
+    )
 
 
 @router.callback_query(F.data == "buy_vpn")
 async def buy_vpn(call: CallbackQuery, state: FSMContext):
-    """Запрашивает имя для VPN-клиента. Заменяет текущее сообщение."""
+    """Запрашивает имя для VPN-клиента."""
     try:
         await call.message.edit_text("Введите имя для VPN (латиницей):")
         await set_last_message(call.from_user.id, call.message.message_id)
@@ -69,8 +68,7 @@ async def buy_vpn(call: CallbackQuery, state: FSMContext):
 
 @router.message(BuyState.waiting_for_name)
 async def process_name(message: Message, state: FSMContext):
-    """Создаёт счёт в ЮKassa и отправляет ссылку на оплату.
-    Здесь используется новое сообщение, так как пользователь ввёл текст."""
+    """Создаёт счёт в ЮKassa и отправляет ссылку на оплату."""
     name = message.text.strip().replace(" ", "_")[:30]
     await state.clear()
     payment = create_payment(message.from_user.id)
@@ -81,7 +79,7 @@ async def process_name(message: Message, state: FSMContext):
         )
         await set_last_message(message.from_user.id, sent.message_id)
     else:
-        await message.answer("❌ Ошибка платежа")
+        await message.answer("❌ Ошибка платежа. Обратитесь в поддержку.")
 
 
 @router.callback_query(F.data == "check_payment")
@@ -105,7 +103,6 @@ async def check_payment_cb(call: CallbackQuery):
 
     await update_subscription(call.from_user.id, client_name, client["id"], cfg.SUBSCRIPTION_DAYS)
 
-    # Удаляем предыдущее сообщение бота, чтобы не копить мусор
     last_id = await get_last_message(call.from_user.id)
     if last_id:
         try:
@@ -127,7 +124,7 @@ async def check_payment_cb(call: CallbackQuery):
 
 @router.callback_query(F.data == "my_sub")
 async def my_sub(call: CallbackQuery):
-    """Показывает дату окончания подписки. Заменяет текущее сообщение."""
+    """Показывает дату окончания подписки."""
     user = await get_user(call.from_user.id)
     if user and user["is_active"]:
         text = f"📋 Активна до: {user['paid_until']}"

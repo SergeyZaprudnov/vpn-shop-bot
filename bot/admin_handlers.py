@@ -29,8 +29,7 @@ class AdminState(StatesGroup):
 
 async def safe_edit(call: CallbackQuery, text: str,
                     reply_markup=None, parse_mode="HTML"):
-    """Удаляет предыдущее сообщение бота и редактирует/отправляет новое.
-    Гарантирует, что в чате всегда одно актуальное сообщение админ-панели."""
+    """Удаляет предыдущее сообщение бота и редактирует/отправляет новое."""
     user_id = call.from_user.id
     last_id = await get_last_message(user_id)
 
@@ -61,14 +60,26 @@ async def safe_edit(call: CallbackQuery, text: str,
 @router.message(Command("admin"), IsAdmin())
 async def admin_panel(message: Message):
     """Открывает админ-панель по команде /admin."""
-    sent = await message.answer("🔐 Админ-панель", reply_markup=admin_menu())
+    name = message.from_user.first_name or "админ"
+    sent = await message.answer(
+        f"👋 Привет, <b>{name}</b>!\n\n"
+        "🔐 Админ-панель\nВыберите действие:",
+        parse_mode="HTML",
+        reply_markup=admin_menu()
+    )
     await set_last_message(message.from_user.id, sent.message_id)
 
 
 @router.callback_query(F.data == "admin_menu", IsAdmin())
 async def back_admin(call: CallbackQuery):
     """Возврат в главное меню админки."""
-    await safe_edit(call, "🔐 Админ-панель", reply_markup=admin_menu())
+    name = call.from_user.first_name or "админ"
+    await safe_edit(
+        call,
+        f"👋 Привет, <b>{name}</b>!\n\n"
+        "🔐 Админ-панель\nВыберите действие:",
+        reply_markup=admin_menu()
+    )
     await call.answer()
 
 
@@ -89,7 +100,7 @@ async def show_stats(call: CallbackQuery):
 
 @router.callback_query(F.data == "admin_clients", IsAdmin())
 async def show_clients(call: CallbackQuery):
-    """Показывает список всех клиентов из БД (для управления)."""
+    """Показывает список всех клиентов из БД."""
     clients = await get_all_clients()
     if not clients:
         await safe_edit(call, "Нет клиентов.", reply_markup=admin_menu())
@@ -100,7 +111,7 @@ async def show_clients(call: CallbackQuery):
 
 @router.callback_query(F.data == "admin_configs", IsAdmin())
 async def show_all_configs(call: CallbackQuery):
-    """Показывает список ВСЕХ конфигов из панели AmneziaWG (включая созданные вручную)."""
+    """Показывает список ВСЕХ конфигов из панели AmneziaWG."""
     clients = await awg.get_clients()
     if not clients:
         await safe_edit(call, "📋 Нет созданных конфигов.", reply_markup=admin_menu())
@@ -132,8 +143,10 @@ async def manage_client(call: CallbackQuery):
         return
 
     status = "🟢 Активен" if u["is_active"] else "🔴 Заблокирован"
+    tg_name = u["first_name"] or u["username"] or "—"
     text = (
         f"👤 <b>{u['client_name']}</b>\n\n"
+        f"Telegram: <b>{tg_name}</b>\n"
         f"Статус: {status}\n"
         f"До: <code>{u['paid_until']}</code>\n"
         f"ID: <code>{uid}</code>"
