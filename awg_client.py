@@ -12,7 +12,6 @@ class AWGClient:
     def __init__(self):
         self.base = cfg.AWG_URL.rstrip("/")
         self.session = None
-        # Basic Auth: логин всегда "admin", пароль из .env
         self.auth = aiohttp.BasicAuth("admin", cfg.AWG_PASSWORD)
 
     async def _get_session(self):
@@ -47,6 +46,21 @@ class AWGClient:
                 return await resp.text() if resp.status == 200 else None
         except Exception:
             return None
+
+    async def get_clients(self) -> list:
+        """Возвращает список всех клиентов из панели AmneziaWG."""
+        session = await self._get_session()
+        try:
+            async with session.get(
+                f"{self.base}/api/wireguard/client"
+            ) as resp:
+                if resp.status != 200:
+                    logger.error(f"AWG get_clients failed: {resp.status}")
+                    return []
+                return await resp.json()
+        except Exception as e:
+            logger.exception(f"AWG get_clients error: {e}")
+            return []
 
     async def disable_client(self, client_id: str) -> bool:
         """Блокирует клиента (сохраняя ключи)."""
