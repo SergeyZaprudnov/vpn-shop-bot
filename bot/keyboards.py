@@ -33,6 +33,7 @@ def admin_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 Общая статистика", callback_data="admin_stats")],
         [InlineKeyboardButton(text="👥 Управление клиентами", callback_data="admin_clients")],
+        [InlineKeyboardButton(text="📋 Все конфиги", callback_data="admin_configs")],
     ])
 
 
