@@ -5,6 +5,7 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
+import logging
 
 from database import (
     add_user, get_user, update_subscription,
@@ -18,6 +19,7 @@ from bot.keyboards import (
 )
 from config import cfg
 
+logger = logging.getLogger(__name__)
 router = Router()
 
 
@@ -91,18 +93,47 @@ async def check_payment_cb(call: CallbackQuery):
         return
 
     client_name = f"user_{call.from_user.id}"
-    client = await awg.create_client(client_name)
-    if not client:
+
+    # 1. Создаём клиента в панели
+    created = await awg.create_client(client_name)
+    if not created:
         await call.answer("❌ Ошибка создания клиента", show_alert=True)
         return
 
-    config_text = await awg.get_client_config(client["id"])
+    # 2. Запрашиваем список клиентов и ищем созданного по имени
+    clients = await awg.get_clients()
+    client = next((c for c in clients if c.get("name") == client_name), None)
+
+    if not client:
+        logger.error(f"Client '{client_name}' not found after creation. Clients: {clients}")
+        await call.answer("❌ Клиент создан, но не найден в списке", show_alert=True)
+        return
+
+    # 3. Извлекаем id (у разных форков поле называется по-разному)
+    client_id = (
+        client.get("id")
+        or client.get("_id")
+        or client.get("clientId")
+        or client.get("publicKey")
+    )
+
+    if not client_id:
+        logger.error(f"Unknown client format: {client}")
+        await call.answer("❌ Неверный формат ответа панели", show_alert=True)
+        return
+
+    # 4. Скачиваем конфиг
+    config_text = await awg.get_client_config(client_id)
     if not config_text:
         await call.answer("❌ Ошибка получения конфига", show_alert=True)
         return
 
-    await update_subscription(call.from_user.id, client_name, client["id"], cfg.SUBSCRIPTION_DAYS)
+    # 5. Сохраняем в БД
+    await update_subscription(
+        call.from_user.id, client_name, client_id, cfg.SUBSCRIPTION_DAYS
+    )
 
+    # 6. Удаляем предыдущее сообщение бота и отправляем конфиг
     last_id = await get_last_message(call.from_user.id)
     if last_id:
         try:
@@ -155,7 +186,9 @@ async def help_android(call: CallbackQuery):
         "7. Статус <b>«Подключено»</b> — готово!"
     )
     try:
-        await call.message.edit_text(text, parse_mode="HTML", reply_markup=install_help_keyboard())
+        await call.message.edit_text(
+            text, parse_mode="HTML", reply_markup=install_help_keyboard()
+        )
         await set_last_message(call.from_user.id, call.message.message_id)
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
@@ -177,7 +210,9 @@ async def help_ios(call: CallbackQuery):
         "Используйте <b>DefaultVPN</b> (доступен в РФ) или смените регион."
     )
     try:
-        await call.message.edit_text(text, parse_mode="HTML", reply_markup=install_help_keyboard())
+        await call.message.edit_text(
+            text, parse_mode="HTML", reply_markup=install_help_keyboard()
+        )
         await set_last_message(call.from_user.id, call.message.message_id)
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
@@ -196,7 +231,9 @@ async def help_windows(call: CallbackQuery):
         "5. Нажмите <b>«Connect»</b>. Готово!"
     )
     try:
-        await call.message.edit_text(text, parse_mode="HTML", reply_markup=install_help_keyboard())
+        await call.message.edit_text(
+            text, parse_mode="HTML", reply_markup=install_help_keyboard()
+        )
         await set_last_message(call.from_user.id, call.message.message_id)
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
@@ -216,7 +253,9 @@ async def help_macos(call: CallbackQuery):
         "6. Выберите туннель → <b>Activate</b>."
     )
     try:
-        await call.message.edit_text(text, parse_mode="HTML", reply_markup=install_help_keyboard())
+        await call.message.edit_text(
+            text, parse_mode="HTML", reply_markup=install_help_keyboard()
+        )
         await set_last_message(call.from_user.id, call.message.message_id)
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
