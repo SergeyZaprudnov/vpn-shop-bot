@@ -1,6 +1,6 @@
 """Обработчики команд и кнопок для обычных пользователей."""
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -142,7 +142,10 @@ async def check_payment_cb(call: CallbackQuery):
             pass
 
     await call.message.answer_document(
-        document=("vpn.conf", config_text.encode()),
+        document=BufferedInputFile(
+            config_text.encode(),
+            filename="vpn.conf"
+        ),
         caption=f"✅ Оплата получена! Ваш VPN-конфиг на {cfg.SUBSCRIPTION_DAYS} дней."
     )
     sent = await call.message.answer(

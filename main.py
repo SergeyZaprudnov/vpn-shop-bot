@@ -4,6 +4,8 @@ import logging
 import threading
 from flask import Flask, request, jsonify
 from aiogram import Bot, Dispatcher
+from aiogram.types import BufferedInputFile
+
 from config import cfg
 from database import init_db, get_user, update_subscription, record_payment
 from bot.handlers import router
@@ -37,24 +39,53 @@ def yookassa_webhook():
 async def process_payment(user_id: int, payment_id: str):
     """Создаёт клиента, скачивает конфиг и отправляет пользователю."""
     client_name = f"user_{user_id}"
-    client = await awg.create_client(client_name)
-    if not client:
-        return
-    config_text = await awg.get_client_config(client["id"])
-    if not config_text:
+
+    # 1. Создаём клиента в панели
+    created = await awg.create_client(client_name)
+    if not created:
+        logger.error(f"Failed to create AWG client for {user_id}")
         return
 
-    await update_subscription(user_id, client_name, client["id"], cfg.SUBSCRIPTION_DAYS)
+    # 2. Ищем его в списке
+    clients = await awg.get_clients()
+    client = next((c for c in clients if c.get("name") == client_name), None)
+    if not client:
+        logger.error(f"Client '{client_name}' not found after creation")
+        return
+
+    # 3. Извлекаем id
+    client_id = (
+        client.get("id")
+        or client.get("_id")
+        or client.get("clientId")
+        or client.get("publicKey")
+    )
+    if not client_id:
+        logger.error(f"Unknown client format: {client}")
+        return
+
+    # 4. Скачиваем конфиг
+    config_text = await awg.get_client_config(client_id)
+    if not config_text:
+        logger.error(f"Failed to get config for {client_name}")
+        return
+
+    # 5. Сохраняем в БД
+    await update_subscription(user_id, client_name, client_id, cfg.SUBSCRIPTION_DAYS)
     await record_payment(user_id, cfg.PAYMENT_PRICE, payment_id)
 
+    # 6. Отправляем пользователю
     try:
         await bot.send_document(
             user_id,
-            document=("vpn.conf", config_text.encode()),
+            document=BufferedInputFile(
+                config_text.encode(),
+                filename="vpn.conf"
+            ),
             caption="✅ VPN активен!"
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception(f"Failed to send config to {user_id}: {e}")
 
 
 async def run_bot():
