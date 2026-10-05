@@ -12,6 +12,7 @@ class AWGClient:
     def __init__(self):
         self.base = cfg.AWG_URL.rstrip("/")
         self.session = None
+        # Basic Auth: логин всегда "admin", пароль из .env
         self.auth = aiohttp.BasicAuth("admin", cfg.AWG_PASSWORD)
 
     async def _get_session(self):
