@@ -88,8 +88,7 @@ async def process_name(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "check_payment")
 async def check_payment_cb(call: CallbackQuery):
-    """Кнопка «Я оплатил» — только уведомляет, что оплата проверяется автоматически.
-    Никакого создания клиента здесь НЕТ — это делает вебхук ЮKassa."""
+    """Кнопка «Я оплатил» — только уведомляет, что оплата проверяется автоматически."""
     await call.answer(
         "✅ Оплата проверяется автоматически.\n"
         "Через 5–30 секунд вы получите конфиг в этот чат.",
