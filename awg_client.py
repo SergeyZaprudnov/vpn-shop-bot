@@ -1,4 +1,4 @@
-"""Асинхронный HTTP-клиент для управления клиентами в панели AmneziaWG Easy (rylorin)."""
+"""Асинхронный HTTP-клиент для управления клиентами в панели rylorin/amnezia-wg-easy."""
 import aiohttp
 import logging
 from config import cfg
@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 class AWGClient:
-    """Обёртка над REST API панели rylorin/amnezia-wg-easy с сессионной авторизацией."""
+    """Обёртка над REST API панели rylorin с сессионной авторизацией."""
 
     def __init__(self):
         self.base = cfg.AWG_URL.rstrip("/")
@@ -22,7 +22,7 @@ class AWGClient:
         return self.session
 
     async def _login(self) -> bool:
-        """Логинится в панели и сохраняет cookie в сессии."""
+        """Логинится в панели, сохраняет cookie в сессии."""
         session = await self._get_session()
         try:
             async with session.post(
@@ -40,7 +40,6 @@ class AWGClient:
             return False
 
     async def _request(self, method: str, path: str, **kwargs):
-        """Выполняет запрос, автоматически логинясь при необходимости."""
         session = await self._get_session()
         if not self.logged_in:
             if not await self._login():
@@ -49,7 +48,6 @@ class AWGClient:
         resp = await session.request(method, f"{self.base}{path}", **kwargs)
 
         if resp.status == 401:
-            # Сессия истекла — перелогиниваемся и повторяем
             resp.release()
             if await self._login():
                 resp = await session.request(method, f"{self.base}{path}", **kwargs)
