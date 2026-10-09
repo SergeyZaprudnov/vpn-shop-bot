@@ -1,10 +1,11 @@
-"""Точка входа: Flask (вебхук ЮKassa) + aiogram-бот."""
+"""Точка входа: Flask (вебхуки ЮKassa и Telegram) + aiogram-бот."""
 import asyncio
 import logging
 import threading
 from flask import Flask, request, jsonify
 from aiogram import Bot, Dispatcher
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, Update
+from aiogram.client.session.aiohttp import AiohttpSession
 
 from config import cfg
 from database import init_db, get_user, update_subscription, record_payment
@@ -17,10 +18,20 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-bot = Bot(token=cfg.BOT_TOKEN)
+
+# Прокси для Telegram (если задан в .env)
+if cfg.TELEGRAM_PROXY:
+    session = AiohttpSession(proxy=cfg.TELEGRAM_PROXY)
+    bot = Bot(token=cfg.BOT_TOKEN, session=session)
+    logger.info(f"Telegram proxy enabled: {cfg.TELEGRAM_PROXY}")
+else:
+    bot = Bot(token=cfg.BOT_TOKEN)
+
 dp = Dispatcher()
 dp.include_router(router)
 dp.include_router(admin_router)
+
+loop = None
 
 
 @app.route("/yookassa/webhook", methods=["POST"])
@@ -45,50 +56,59 @@ def yookassa_webhook():
     return jsonify({"status": "ok"}), 200
 
 
+@app.route("/telegram/webhook", methods=["POST"])
+def telegram_webhook():
+    """Вебхук от Telegram: принимает обновления от бота."""
+    update = Update.model_validate(request.json, context={"bot": bot})
+    asyncio.run_coroutine_threadsafe(dp.feed_update(bot, update), loop)
+    return jsonify({"status": "ok"}), 200
+
+
 @app.route("/health", methods=["GET"])
 def health():
-    """Простой healthcheck для Nginx."""
     return jsonify({"status": "ok"}), 200
 
 
 async def process_payment(user_id: int, payment_id: str):
-    """Создаёт клиента через manage_amneziawg.sh, отправляет .conf пользователю."""
+    """Создаёт клиента, читает конфиг, отправляет с retry."""
     client_name = f"user_{user_id}"
     logger.info(f"Processing payment for {client_name}")
 
-    # 1. Создаём клиента через manage-скрипт
     created = await awg.create_client(client_name)
     if not created:
         logger.error(f"Failed to create AWG client for {user_id}")
         return
 
-    # 2. Читаем .conf
     config_text = await awg.get_client_config(client_name)
     if not config_text:
         logger.error(f"Failed to read config for {client_name}")
         return
 
-    # 3. Сохраняем в БД
     await update_subscription(user_id, client_name, client_name, cfg.SUBSCRIPTION_DAYS)
     await record_payment(user_id, cfg.PAYMENT_PRICE, payment_id)
 
-    # 4. Отправляем файл пользователю
-    try:
-        await bot.send_document(
-            user_id,
-            document=BufferedInputFile(
-                config_text.encode(),
-                filename=f"{client_name}.conf"
-            ),
-            caption="✅ VPN активен! Импортируйте файл в приложение AmneziaWG."
-        )
-        logger.info(f"Config sent to {user_id}")
-    except Exception as e:
-        logger.exception(f"Failed to send config to {user_id}: {e}")
+    # Retry отправки в Telegram (5 попыток с задержкой)
+    for attempt in range(5):
+        try:
+            await bot.send_document(
+                user_id,
+                document=BufferedInputFile(
+                    config_text.encode(),
+                    filename=f"{client_name}.conf"
+                ),
+                caption="✅ VPN активен! Импортируйте файл в приложение AmneziaWG."
+            )
+            logger.info(f"Config sent to {user_id} (attempt {attempt+1})")
+            return
+        except Exception as e:
+            logger.warning(f"Attempt {attempt+1} failed: {e}")
+            await asyncio.sleep(10)
+
+    logger.error(f"Failed to send config to {user_id} after 5 attempts")
 
 
 async def run_bot():
-    """Инициализирует БД, планировщик и запускает polling."""
+    """Инициализирует БД, планировщик и polling."""
     await init_db()
     setup_scheduler(bot)
     await dp.start_polling(bot)
