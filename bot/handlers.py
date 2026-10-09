@@ -73,10 +73,12 @@ async def process_name(message: Message, state: FSMContext):
     """Создаёт счёт в ЮKassa и отправляет ссылку на оплату."""
     name = message.text.strip().replace(" ", "_")[:30]
     await state.clear()
+
     payment = create_payment(message.from_user.id)
     if payment:
         sent = await message.answer(
-            f"💳 Счёт на {cfg.PAYMENT_PRICE} ₽",
+            f"💳 Счёт на {cfg.PAYMENT_PRICE} ₽\n\n"
+            f"После оплаты нажмите «Я оплатил» — конфиг придёт автоматически.",
             reply_markup=payment_keyboard(payment["confirmation_url"])
         )
         await set_last_message(message.from_user.id, sent.message_id)
@@ -86,74 +88,13 @@ async def process_name(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "check_payment")
 async def check_payment_cb(call: CallbackQuery):
-    """Проверяет оплату и выдаёт конфиг."""
-    user = await get_user(call.from_user.id)
-    if not user:
-        await call.answer("Сначала создайте платёж", show_alert=True)
-        return
-
-    client_name = f"user_{call.from_user.id}"
-
-    # 1. Создаём клиента в панели
-    created = await awg.create_client(client_name)
-    if not created:
-        await call.answer("❌ Ошибка создания клиента", show_alert=True)
-        return
-
-    # 2. Запрашиваем список клиентов и ищем созданного по имени
-    clients = await awg.get_clients()
-    client = next((c for c in clients if c.get("name") == client_name), None)
-
-    if not client:
-        logger.error(f"Client '{client_name}' not found after creation. Clients: {clients}")
-        await call.answer("❌ Клиент создан, но не найден в списке", show_alert=True)
-        return
-
-    # 3. Извлекаем id (у разных форков поле называется по-разному)
-    client_id = (
-        client.get("id")
-        or client.get("_id")
-        or client.get("clientId")
-        or client.get("publicKey")
+    """Кнопка «Я оплатил» — только уведомляет, что оплата проверяется автоматически.
+    Никакого создания клиента здесь НЕТ — это делает вебхук ЮKassa."""
+    await call.answer(
+        "✅ Оплата проверяется автоматически.\n"
+        "Через 5–30 секунд вы получите конфиг в этот чат.",
+        show_alert=True
     )
-
-    if not client_id:
-        logger.error(f"Unknown client format: {client}")
-        await call.answer("❌ Неверный формат ответа панели", show_alert=True)
-        return
-
-    # 4. Скачиваем конфиг
-    config_text = await awg.get_client_config(client_id)
-    if not config_text:
-        await call.answer("❌ Ошибка получения конфига", show_alert=True)
-        return
-
-    # 5. Сохраняем в БД
-    await update_subscription(
-        call.from_user.id, client_name, client_id, cfg.SUBSCRIPTION_DAYS
-    )
-
-    # 6. Удаляем предыдущее сообщение бота и отправляем конфиг
-    last_id = await get_last_message(call.from_user.id)
-    if last_id:
-        try:
-            await call.bot.delete_message(chat_id=call.from_user.id, message_id=last_id)
-        except Exception:
-            pass
-
-    await call.message.answer_document(
-        document=BufferedInputFile(
-            config_text.encode(),
-            filename="vpn.conf"
-        ),
-        caption=f"✅ Оплата получена! Ваш VPN-конфиг на {cfg.SUBSCRIPTION_DAYS} дней."
-    )
-    sent = await call.message.answer(
-        "📱 Выберите ваше устройство, чтобы получить инструкцию по установке:",
-        reply_markup=install_help_keyboard()
-    )
-    await set_last_message(call.from_user.id, sent.message_id)
-    await call.answer("Готово!")
 
 
 @router.callback_query(F.data == "my_sub")
