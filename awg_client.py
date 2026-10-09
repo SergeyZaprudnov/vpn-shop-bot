@@ -1,102 +1,93 @@
-"""Асинхронный HTTP-клиент для управления клиентами в панели rylorin/amnezia-wg-easy."""
-import aiohttp
+"""Клиент для управления AmneziaWG через manage_amneziawg.sh (bivlked v5.37.1)."""
+import asyncio
+import json
 import logging
-from config import cfg
+import os
 
 logger = logging.getLogger(__name__)
 
+MANAGE_SCRIPT = "/root/awg/manage_amneziawg.sh"
+CONF_DIR = "/root/awg"
+
 
 class AWGClient:
-    """Обёртка над REST API панели rylorin с сессионной авторизацией."""
+    """Обёртка над manage_amneziawg.sh для вызова из бота."""
 
-    def __init__(self):
-        self.base = cfg.AWG_URL.rstrip("/")
-        self.session: aiohttp.ClientSession | None = None
-        self.password = cfg.AWG_PASSWORD
-        self.logged_in = False
-
-    async def _get_session(self) -> aiohttp.ClientSession:
-        if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
-            self.logged_in = False
-        return self.session
-
-    async def _login(self) -> bool:
-        """Логинится в панели, сохраняет cookie в сессии."""
-        session = await self._get_session()
+    async def _run(self, *args, timeout: int = 30) -> tuple[int, str, str]:
+        """Запускает manage_amneziawg.sh с аргументами и флагом --yes."""
+        cmd = ["bash", MANAGE_SCRIPT, *args, "--yes"]
         try:
-            async with session.post(
-                f"{self.base}/api/session",
-                json={"password": self.password}
-            ) as resp:
-                if resp.status == 200:
-                    self.logged_in = True
-                    logger.info("AWG login successful")
-                    return True
-                logger.error(f"AWG login failed: {resp.status} {await resp.text()}")
-                return False
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            return proc.returncode, stdout.decode(), stderr.decode()
+        except asyncio.TimeoutError:
+            logger.error(f"manage script timeout: {args}")
+            return 1, "", "timeout"
+
+    def _extract_json(self, out: str):
+        """Достаёт JSON из вывода скрипта (между INFO-логами)."""
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("[") or line.startswith("{"):
+                try:
+                    return json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+        return None
+
+    async def create_client(self, name: str) -> dict | None:
+        """Создаёт клиента через manage_amneziawg.sh add."""
+        rc, out, err = await self._run("add", name, "--psk")
+        if rc != 0:
+            logger.error(f"create_client failed: {err or out}")
+            return None
+        return {"name": name, "success": True}
+
+    async def get_client_config(self, name: str) -> str | None:
+        """Читает .conf файл клиента."""
+        path = os.path.join(CONF_DIR, f"{name}.conf")
+        try:
+            with open(path, "r") as f:
+                return f.read()
         except Exception as e:
-            logger.exception(f"AWG login error: {e}")
-            return False
-
-    async def _request(self, method: str, path: str, **kwargs):
-        session = await self._get_session()
-        if not self.logged_in:
-            if not await self._login():
-                return None
-
-        resp = await session.request(method, f"{self.base}{path}", **kwargs)
-
-        if resp.status == 401:
-            resp.release()
-            if await self._login():
-                resp = await session.request(method, f"{self.base}{path}", **kwargs)
-        return resp
-
-    async def create_client(self, name: str):
-        resp = await self._request("POST", "/api/wireguard/client", json={"name": name})
-        if resp and resp.status == 200:
-            data = await resp.json()
-            resp.release()
-            return data
-        return None
-
-    async def get_client_config(self, client_id: str):
-        resp = await self._request("GET", f"/api/wireguard/client/{client_id}/configuration")
-        if resp and resp.status == 200:
-            text = await resp.text()
-            resp.release()
-            return text
-        return None
+            logger.exception(f"get_client_config error: {e}")
+            return None
 
     async def get_clients(self) -> list:
-        resp = await self._request("GET", "/api/wireguard/client")
-        if resp and resp.status == 200:
-            data = await resp.json()
-            resp.release()
-            return data
-        return []
+        """Возвращает список клиентов (list --json)."""
+        rc, out, err = await self._run("list", "--json")
+        if rc != 0:
+            logger.error(f"get_clients failed: {err or out}")
+            return []
+        data = self._extract_json(out)
+        return data if isinstance(data, list) else []
 
-    async def disable_client(self, client_id: str) -> bool:
-        resp = await self._request("POST", f"/api/wireguard/client/{client_id}/disable")
-        ok = resp is not None and resp.status == 200
-        if resp:
-            resp.release()
-        return ok
+    async def get_stats(self) -> list:
+        """Возвращает статистику по клиентам (stats --json)."""
+        rc, out, err = await self._run("stats", "--json")
+        if rc != 0:
+            return []
+        data = self._extract_json(out)
+        return data if isinstance(data, list) else []
 
-    async def enable_client(self, client_id: str) -> bool:
-        resp = await self._request("POST", f"/api/wireguard/client/{client_id}/enable")
-        ok = resp is not None and resp.status == 200
-        if resp:
-            resp.release()
-        return ok
+    async def disable_client(self, name: str) -> bool:
+        """В bivlked отключение = удаление (или regen без клиента)."""
+        rc, _, _ = await self._run("remove", name)
+        return rc == 0
 
-    async def delete_client(self, client_id: str) -> bool:
-        resp = await self._request("DELETE", f"/api/wireguard/client/{client_id}")
-        ok = resp is not None and resp.status == 200
-        if resp:
-            resp.release()
-        return ok
+    async def enable_client(self, name: str) -> bool:
+        """Пересоздаёт клиента (аналог включения)."""
+        rc, _, _ = await self._run("regen", name)
+        return rc == 0
+
+    async def delete_client(self, name: str) -> bool:
+        """Удаляет клиента."""
+        rc, _, _ = await self._run("remove", name)
+        return rc == 0
 
 
 awg = AWGClient()
