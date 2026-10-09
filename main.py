@@ -37,56 +37,37 @@ def yookassa_webhook():
 
 
 async def process_payment(user_id: int, payment_id: str):
-    """Создаёт клиента, скачивает конфиг и отправляет пользователю."""
+    """Создаёт клиента через bivlked, читает конфиг, отправляет пользователю."""
     client_name = f"user_{user_id}"
 
-    # 1. Создаём клиента в панели
+    # 1. Создаём клиента через manage-скрипт
     created = await awg.create_client(client_name)
     if not created:
         logger.error(f"Failed to create AWG client for {user_id}")
         return
 
-    # 2. Ищем его в списке
-    clients = await awg.get_clients()
-    client = next((c for c in clients if c.get("name") == client_name), None)
-    if not client:
-        logger.error(f"Client '{client_name}' not found after creation")
-        return
-
-    # 3. Извлекаем id
-    client_id = (
-        client.get("id")
-        or client.get("_id")
-        or client.get("clientId")
-        or client.get("publicKey")
-    )
-    if not client_id:
-        logger.error(f"Unknown client format: {client}")
-        return
-
-    # 4. Скачиваем конфиг
-    config_text = await awg.get_client_config(client_id)
+    # 2. Читаем .conf файл
+    config_text = await awg.get_client_config(client_name)
     if not config_text:
-        logger.error(f"Failed to get config for {client_name}")
+        logger.error(f"Failed to read config for {client_name}")
         return
 
-    # 5. Сохраняем в БД
-    await update_subscription(user_id, client_name, client_id, cfg.SUBSCRIPTION_DAYS)
+    # 3. Сохраняем в БД
+    await update_subscription(user_id, client_name, client_name, cfg.SUBSCRIPTION_DAYS)
     await record_payment(user_id, cfg.PAYMENT_PRICE, payment_id)
 
-    # 6. Отправляем пользователю
+    # 4. Отправляем файл
     try:
         await bot.send_document(
             user_id,
             document=BufferedInputFile(
                 config_text.encode(),
-                filename="vpn.conf"
+                filename=f"{client_name}.conf"
             ),
-            caption="✅ VPN активен!"
+            caption="✅ VPN активен! Импортируйте файл в приложение AmneziaWG."
         )
     except Exception as e:
         logger.exception(f"Failed to send config to {user_id}: {e}")
-
 
 async def run_bot():
     """Инициализирует БД, планировщик и запускает polling."""
