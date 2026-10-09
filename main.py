@@ -1,4 +1,4 @@
-"""Точка входа: запускает Flask (вебхуки) и aiogram-бота параллельно."""
+"""Точка входа: Flask (вебхук ЮKassa) + aiogram-бот."""
 import asyncio
 import logging
 import threading
@@ -26,19 +26,35 @@ dp.include_router(admin_router)
 @app.route("/yookassa/webhook", methods=["POST"])
 def yookassa_webhook():
     """Принимает уведомления от ЮKassa об успешной оплате."""
+    logger.info(f"!!! Webhook received: {request.json}")
+
     event = request.json
     if event.get("event") == "payment.succeeded":
-        user_id = int(event["object"]["metadata"]["user_id"])
-        asyncio.run_coroutine_threadsafe(
-            process_payment(user_id, event["object"]["id"]),
-            loop
-        )
+        try:
+            user_id = int(event["object"]["metadata"]["user_id"])
+            payment_id = event["object"]["id"]
+            logger.info(f"Payment succeeded: user_id={user_id}, payment_id={payment_id}")
+
+            asyncio.run_coroutine_threadsafe(
+                process_payment(user_id, payment_id),
+                loop
+            )
+        except Exception as e:
+            logger.exception(f"Webhook processing error: {e}")
+
+    return jsonify({"status": "ok"}), 200
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    """Простой healthcheck для Nginx."""
     return jsonify({"status": "ok"}), 200
 
 
 async def process_payment(user_id: int, payment_id: str):
-    """Создаёт клиента через bivlked, читает конфиг, отправляет пользователю."""
+    """Создаёт клиента через manage_amneziawg.sh, отправляет .conf пользователю."""
     client_name = f"user_{user_id}"
+    logger.info(f"Processing payment for {client_name}")
 
     # 1. Создаём клиента через manage-скрипт
     created = await awg.create_client(client_name)
@@ -46,7 +62,7 @@ async def process_payment(user_id: int, payment_id: str):
         logger.error(f"Failed to create AWG client for {user_id}")
         return
 
-    # 2. Читаем .conf файл
+    # 2. Читаем .conf
     config_text = await awg.get_client_config(client_name)
     if not config_text:
         logger.error(f"Failed to read config for {client_name}")
@@ -56,7 +72,7 @@ async def process_payment(user_id: int, payment_id: str):
     await update_subscription(user_id, client_name, client_name, cfg.SUBSCRIPTION_DAYS)
     await record_payment(user_id, cfg.PAYMENT_PRICE, payment_id)
 
-    # 4. Отправляем файл
+    # 4. Отправляем файл пользователю
     try:
         await bot.send_document(
             user_id,
@@ -66,8 +82,10 @@ async def process_payment(user_id: int, payment_id: str):
             ),
             caption="✅ VPN активен! Импортируйте файл в приложение AmneziaWG."
         )
+        logger.info(f"Config sent to {user_id}")
     except Exception as e:
         logger.exception(f"Failed to send config to {user_id}: {e}")
+
 
 async def run_bot():
     """Инициализирует БД, планировщик и запускает polling."""

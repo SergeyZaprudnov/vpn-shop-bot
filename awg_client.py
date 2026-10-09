@@ -45,6 +45,7 @@ class AWGClient:
         if rc != 0:
             logger.error(f"create_client failed: {err or out}")
             return None
+        logger.info(f"Client '{name}' created")
         return {"name": name, "success": True}
 
     async def get_client_config(self, name: str) -> str | None:
@@ -75,7 +76,7 @@ class AWGClient:
         return data if isinstance(data, list) else []
 
     async def disable_client(self, name: str) -> bool:
-        """В bivlked отключение = удаление (или regen без клиента)."""
+        """В bivlked отключение = удаление."""
         rc, _, _ = await self._run("remove", name)
         return rc == 0
 
